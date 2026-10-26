@@ -1,0 +1,12 @@
+name: 'chile_road_safety'
+version: '1.0.0'
+config-version: 2
+
+profile: 'chile_road_safety'
+
+model-paths: ['models']
+
+models:
+  chile_road_safety:
+    staging:
+      +materialized: view

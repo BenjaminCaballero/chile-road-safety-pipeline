@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: stg_vehicle_safety
+    description: "Datos anuales de siniestros estandarizados desde la fuente original."
+
+    columns:
+      - name: year
+        data_tests:
+          - not_null
+
+      - name: vehicle_type
+        data_tests:
+          - not_null
+
+      - name: crashes
+        data_tests:
+          - not_null
+
+  - name: mart_vehicle_trends
+    description: "Variación interanual de siniestros por tipo de vehículo."
+
+    columns:
+      - name: year
+        data_tests:
+          - not_null
+
+      - name: vehicle_type
+        data_tests:
+          - not_null
+
+      - name: crashes
+        data_tests:
+          - not_null

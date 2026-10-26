@@ -12,3 +12,8 @@ __pycache__/
 # Generated datasets
 data/raw/*
 !data/raw/.gitkeep
+
+# dbt generated files
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
