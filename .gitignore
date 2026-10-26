@@ -17,3 +17,6 @@ data/raw/*
 dbt/target/
 dbt/logs/
 dbt/dbt_packages/
+
+# dbt local user configuration
+dbt/.user.yml
