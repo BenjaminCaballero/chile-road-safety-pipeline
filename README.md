@@ -12,7 +12,7 @@ The entire pipeline can be executed with a single command, from the source API t
 
 ```bash
 # Clone the repository
-git clone https://github.com/<YOUR_USERNAME>/chile-road-safety-pipeline.git
+git clone https://github.com/BenjaminCaballero/chile-road-safety-pipeline.git
 cd chile-road-safety-pipeline
 
 # Create and activate a virtual environment
