@@ -82,6 +82,7 @@ def main():
     print(f"Records: {len(records)}")
     print(f"SHA-256: {source_hash}")
     print(f"Snapshot saved: {output_path}")
+    return output_path
 
 
 if __name__ == "__main__":
