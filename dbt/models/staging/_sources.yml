@@ -2,6 +2,6 @@ version: 2
 
 sources:
   - name: raw
-    schema: raw
+    schema: "{{ 'road_safety_raw' if target.type == 'bigquery' else 'raw' }}"
     tables:
       - name: vehicle_safety

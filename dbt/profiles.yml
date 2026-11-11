@@ -11,3 +11,12 @@ chile_road_safety:
       dbname: "{{ env_var('POSTGRES_DB') }}"
       schema: analytics
       threads: 2
+
+    bigquery:
+      type: bigquery
+      method: oauth
+      project: chile-road-safety-pipeline
+      dataset: road_safety_analytics
+      location: US
+      threads: 2
+      priority: interactive

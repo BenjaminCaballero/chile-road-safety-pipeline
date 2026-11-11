@@ -33,7 +33,7 @@ SELECT
              AND previous_crashes > 0
 
         THEN ROUND(
-            (crashes - previous_crashes)::NUMERIC
+            CAST(crashes - previous_crashes AS numeric)
             / previous_crashes * 100,
             2
         )
