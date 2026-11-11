@@ -1,0 +1,17 @@
+.git/
+.venv/
+.venv-airflow/
+.airflow-home/
+
+.env
+.env.*
+*.json.key
+
+data/
+dbt/
+test/
+airflow/
+
+__pycache__/
+.pytest_cache/
+*.pyc

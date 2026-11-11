@@ -44,7 +44,13 @@ def upload_snapshot_gcs(snapshot_path: str) -> str:
 
     bucket = client.bucket(bucket_name)
 
-    object_name = f"snapshots/{path.name}"
+    object_name = (
+        os.environ.get("GCS_OBJECT_NAME")
+        or f"snapshots/{path.name}"
+    )
+
+    if not object_name.startswith("snapshots/"):
+        raise ValueError("GCS object must be inside snapshots/")
 
     blob = bucket.blob(object_name)
 
