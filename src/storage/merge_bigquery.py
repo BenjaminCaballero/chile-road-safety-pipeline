@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from google.cloud import bigquery
+from google.cloud import storage
 
 from src.ingestion.validators import validate_records
 from src.ingestion.run_ingestion import calculate_source_hash
@@ -13,13 +14,42 @@ PROJECT_ID = "chile-road-safety-pipeline"
 DATASET_ID = "road_safety_raw"
 TARGET_TABLE = f"{PROJECT_ID}.{DATASET_ID}.vehicle_safety"
 
+def read_snapshot(snapshot_source: str) -> dict:
+    """
+    Lee un snapshot desde un archivo local o desde GCS.
+    """
+
+    if snapshot_source.startswith("gs://"):
+
+        # Separar el nombre del bucket y el objeto
+        location = snapshot_source.removeprefix("gs://")
+
+        try:
+            bucket_name, object_name = location.split("/", 1)
+        except ValueError as exc:
+            raise ValueError("Invalid GCS URI") from exc
+
+        if not bucket_name or not object_name:
+            raise ValueError("Invalid GCS URI")
+
+        # Descargar el contenido desde Cloud Storage
+        client = storage.Client(project=PROJECT_ID)
+
+        blob = client.bucket(bucket_name).blob(object_name)
+
+        content = blob.download_as_text(encoding="utf-8")
+
+        return json.loads(content)
+
+    # Mantener compatibilidad con archivos locales
+    return json.loads(
+        Path(snapshot_source).read_text(encoding="utf-8")
+    )
 
 def merge_snapshot_bigquery(snapshot_path: str) -> None:
 
     # 1. Leer snapshot
-    snapshot = json.loads(
-        Path(snapshot_path).read_text(encoding="utf-8")
-    )
+    snapshot = read_snapshot(snapshot_path)
 
     records = snapshot["data"]
 
