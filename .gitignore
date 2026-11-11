@@ -20,3 +20,7 @@ dbt/dbt_packages/
 
 # dbt local user configuration
 dbt/.user.yml
+
+# Airflow local development
+.venv-airflow/
+.airflow-home/
