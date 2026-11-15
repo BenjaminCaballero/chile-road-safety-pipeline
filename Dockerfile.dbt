@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install dbt and BigQuery adapter
+COPY requirements-dbt.txt .
+
+RUN pip install --no-cache-dir -r requirements-dbt.txt
+
+# Copy dbt project
+COPY dbt/dbt_project.yml /app/dbt/dbt_project.yml
+COPY dbt/models/ /app/dbt/models/
+COPY dbt/tests/ /app/dbt/tests/
+
+# Copy Cloud Run-specific dbt profile
+COPY deploy/dbt/profiles.yml /app/profiles/profiles.yml
+
+# Ensure Python logs appear immediately
+ENV PYTHONUNBUFFERED=1
+
+# Execute transformations and data quality tests
+CMD ["dbt", "build", "--project-dir", "/app/dbt", "--profiles-dir", "/app/profiles", "--target", "bigquery"]

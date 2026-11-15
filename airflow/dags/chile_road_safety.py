@@ -16,22 +16,15 @@ from airflow.sdk import dag, task
 # Project root directory
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Python environment used by the data pipeline
-PYTHON = PROJECT_ROOT / ".venv/bin/python"
-
-# dbt and dotenv executables
-DBT = PROJECT_ROOT / ".venv/bin/dbt"
-DOTENV = PROJECT_ROOT / ".venv/bin/dotenv"
-
-# dbt project directory
-DBT_DIR = PROJECT_ROOT / "dbt"
-
 # Google Cloud configuration
 PROJECT_ID = "chile-road-safety-pipeline"
 GCS_BUCKET = "chile-road-safety-pipeline-raw-bc-2026"
 
 # Cloud Run configuration
 CLOUD_RUN_JOB = "road-safety-extract"
+CLOUD_RUN_MERGE_JOB = "road-safety-merge"
+CLOUD_RUN_DBT_JOB = "road-safety-dbt"
+
 REGION = "us-central1"
 
 
@@ -112,66 +105,93 @@ def chile_road_safety_pipeline():
         return gcs_uri
 
     # ========================================================
-    # TASK 2: INCREMENTAL LOAD TO BIGQUERY
+    # TASK 2: EXECUTE BIGQUERY MERGE IN CLOUD RUN
     # ========================================================
 
     @task(
         retries=1,
         retry_delay=timedelta(minutes=1),
     )
-    def merge_bigquery(gcs_uri: str):
+    def execute_cloud_merge(gcs_uri: str):
 
         print(
-            f"Loading snapshot from: {gcs_uri}",
+            f"Processing snapshot: {gcs_uri}",
             flush=True,
         )
 
-        subprocess.run(
+        result = subprocess.run(
             [
-                str(PYTHON),
-                "-m",
-                "src.storage.merge_bigquery",
-                gcs_uri,
-            ],
-            cwd=PROJECT_ROOT,
-            check=True,
-        )
-
-        print(
-            "BigQuery incremental load completed!",
-            flush=True,
-        )
-
-    # ========================================================
-    # TASK 3: DBT TRANSFORMATIONS AND DATA QUALITY TESTS
-    # ========================================================
-
-    @task(
-        retries=1,
-        retry_delay=timedelta(minutes=1),
-    )
-    def dbt_build():
-
-        subprocess.run(
-            [
-                str(DOTENV),
+                "gcloud",
                 "run",
-                "--",
-                str(DBT),
-                "build",
-                "--project-dir",
-                str(DBT_DIR),
-                "--profiles-dir",
-                str(DBT_DIR),
-                "--target",
-                "bigquery",
+                "jobs",
+                "execute",
+                CLOUD_RUN_MERGE_JOB,
+                f"--project={PROJECT_ID}",
+                f"--region={REGION}",
+                f"--args={gcs_uri}",
+                "--wait",
+                "--quiet",
             ],
             cwd=PROJECT_ROOT,
-            check=True,
+            capture_output=True,
+            text=True,
         )
 
+        if result.stdout.strip():
+            print(result.stdout.strip(), flush=True)
+
+        if result.stderr.strip():
+            print(result.stderr.strip(), flush=True)
+
+        result.check_returncode()
+
         print(
-            "dbt build completed successfully!",
+            "Cloud Run BigQuery MERGE completed successfully!",
+            flush=True,
+        )
+
+    # ========================================================
+    # TASK 3: EXECUTE DBT BUILD IN CLOUD RUN
+    # ========================================================
+
+    @task(
+        retries=1,
+        retry_delay=timedelta(minutes=1),
+    )
+    def execute_cloud_dbt():
+
+        print(
+            "Starting dbt build in Cloud Run...",
+            flush=True,
+        )
+
+        result = subprocess.run(
+            [
+                "gcloud",
+                "run",
+                "jobs",
+                "execute",
+                CLOUD_RUN_DBT_JOB,
+                f"--project={PROJECT_ID}",
+                f"--region={REGION}",
+                "--wait",
+                "--quiet",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.stdout.strip():
+            print(result.stdout.strip(), flush=True)
+
+        if result.stderr.strip():
+            print(result.stderr.strip(), flush=True)
+
+        result.check_returncode()
+
+        print(
+            "Cloud Run dbt build completed successfully!",
             flush=True,
         )
 
@@ -179,15 +199,14 @@ def chile_road_safety_pipeline():
     # TASK DEPENDENCIES
     # ========================================================
 
-    # 1. Execute extraction and validation in Cloud Run
+    # 1. Extract and upload data using Cloud Run
     gcs_uri = execute_cloud_run()
 
-    # 2. Read snapshot from GCS and MERGE into BigQuery
-    load_task = merge_bigquery(gcs_uri)
+    # 2. Execute incremental BigQuery MERGE using Cloud Run
+    merge_task = execute_cloud_merge(gcs_uri)
 
     # 3. Execute dbt transformations and tests
-    load_task >> dbt_build()
-
+    merge_task >> execute_cloud_dbt()
 
 # ============================================================
 # REGISTER DAG

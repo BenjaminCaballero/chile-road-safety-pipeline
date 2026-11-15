@@ -1,0 +1,12 @@
+chile_road_safety:
+  target: bigquery
+
+  outputs:
+    bigquery:
+      type: bigquery
+      method: oauth
+      project: chile-road-safety-pipeline
+      dataset: road_safety_analytics
+      location: US
+      threads: 2
+      priority: interactive

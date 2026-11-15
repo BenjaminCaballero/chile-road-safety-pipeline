@@ -8,9 +8,15 @@
 *.json.key
 
 data/
-dbt/
 test/
 airflow/
+
+# Exclude local dbt configuration and generated files
+dbt/profiles.yml
+dbt/dbt_packages/
+dbt/logs/
+dbt/target/
+dbt/.user.yml
 
 __pycache__/
 .pytest_cache/

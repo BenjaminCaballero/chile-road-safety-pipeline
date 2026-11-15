@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install only the dependencies required for BigQuery loading
+COPY requirements-merge.txt .
+
+RUN pip install --no-cache-dir -r requirements-merge.txt
+
+# Copy application source code
+COPY src/ ./src/
+
+# Display Python logs immediately
+ENV PYTHONUNBUFFERED=1
+
+# Execute the BigQuery MERGE module
+ENTRYPOINT ["python", "-m", "src.storage.merge_bigquery"]
