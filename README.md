@@ -315,7 +315,7 @@ The project uses publicly available road safety statistics provided by **Observa
 
 Source: https://www.observatoriologistico.cl/datos/siniestros-de-transito-por-tipo-de-vehiculo
 
-The MIT License applies to this repository's code, **not** to the source data. Downloaded datasets and generated snapshots are excluded from the repository. The source page identifies CONASET as the responsible entity but does not state a dataset-specific open-data license. CONASET publishes [website-content usage terms](https://conaset.cl/politica-de-privacidad/); these must not be assumed to grant unrestricted redistribution rights for this dataset. **[VERIFICAR: dataset-specific reuse/redistribution license or permission from the data provider.]**
+The MIT License applies to this repository's code, **not** to the source data. Downloaded datasets and generated snapshots are excluded from the repository. The source page identifies CONASET as the responsible entity but does not state a dataset-specific open-data license. CONASET publishes [website-content usage terms](https://conaset.cl/politica-de-privacidad/); these must not be assumed to grant unrestricted redistribution rights for this dataset. A dataset-specific license permitting redistribution has not been confirmed. Users should review the data provider's terms before redistributing the source data.
 
 ## 12. Project status and next steps
 

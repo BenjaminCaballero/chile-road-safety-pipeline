@@ -20,7 +20,7 @@ This is the runbook for the **Google Cloud reference deployment** of [Chile Road
 
 The cloud processing path was exercised end-to-end: a local Apache Airflow DAG invoked three deployed Cloud Run Jobs. Their containers perform extraction and validation, BigQuery upsert, and dbt transformations/tests. Airflow itself is **not hosted in Google Cloud**, and the DAG currently has no schedule. Cloud Composer is not deployed.
 
-This document describes an **existing author-owned reference environment**, **not** a fresh-project, turnkey provisioning guide. Google Cloud resources, service-account bindings, and container deployment were created using CLI commands; no Infrastructure as Code or independently verified clean GCP setup exists in the repository. Avoid treating the fixed project IDs and bucket names below as portable defaults.
+The cloud pipeline was deployed and verified in the author's Google Cloud project. Reproducing it in another environment requires creating the corresponding resources, configuring IAM permissions, and building and publishing the container images. Infrastructure provisioning is not automated, and a deployment from a new GCP project has not been independently verified. The project IDs and bucket names below refer to the existing deployment; they are not portable defaults.
 
 ## 2. Architecture
 
@@ -36,8 +36,6 @@ flowchart TD
     AF -->|run after MERGE| DBT
     DBT -->|build views and test| MART[(BigQuery road_safety_analytics)]
 ```
-
-**[VERIFICAR: actual Mermaid rendering in GitHub after the documents are committed; the fenced diagram and internal links were checked statically.]**
 
 The arrows from Airflow represent **orchestration**, not processing of source rows in the Airflow worker. The DAG launches remote executions through the host's `gcloud` binary and waits for each to finish. The images are distributed through Artifact Registry; source snapshots are in Cloud Storage, not Artifact Registry.
 
@@ -107,7 +105,7 @@ The following values reflect the **deploy commands recorded during development**
 | `road-safety-merge` | 1 | 1 | 512 MiB | 300 s | 0 |
 | `road-safety-dbt` | 1 | 1 | 1 GiB | 600 s | 0 |
 
-**[VERIFICAR: current Cloud Run job specifications, including image digests, memory, CPU, task timeout, max retries, service-account identity, and environment overrides. Run `gcloud run jobs describe <job> --region=us-central1 --format=yaml` for all three jobs.]**
+To inspect the **current** job specifications (including image references, resource limits, retries, service accounts, and environment settings), run `gcloud run jobs describe <job> --region=us-central1 --format=yaml` for each job. The table above reflects recorded deployment settings, not a new live-configuration audit.
 
 ## 5. Data semantics
 
@@ -115,7 +113,7 @@ The following values reflect the **deploy commands recorded during development**
 
 The upload implementation calls `blob.upload_from_filename(..., if_generation_match=0)`. This **create-only precondition** prevents that upload from overwriting an existing object of the same name. On `PreconditionFailed`, it reloads the object and compares its stored `run_id` and `source_hash` metadata before treating the existing object as equivalent.
 
-This is a **write-once behavior of this client path**, not proof of GCS bucket-level immutability or content-level verification of the remote object. The code does **not** configure object versioning, retention policies, bucket lock, or an Object Retention Lock. **[VERIFICAR: current bucket versioning, retention policy, retention lock/Object Retention Lock, lifecycle rules, and any external writers. These settings cannot be determined from this repository.]**
+This is a **write-once behavior of this client path**, not proof of GCS bucket-level immutability or content-level verification of the remote object. The code does **not** configure object versioning, retention policies, bucket lock, or an Object Retention Lock. The bucket's live versioning, retention, lock, lifecycle, and external-writer settings were not independently inspected and cannot be inferred from the repository.
 
 The Airflow extract task chooses `snapshots/cloud-run/airflow-<uuid>.json` and passes it as `GCS_OBJECT_NAME`. It returns the corresponding GCS URI through XCom only after `gcloud run jobs execute ... --wait` succeeds.
 
@@ -148,7 +146,7 @@ python -m pip install 'apache-airflow==3.4.0' \
   --constraint 'https://raw.githubusercontent.com/apache/airflow/constraints-3.4.0/constraints-3.12.txt'
 ```
 
-**[VERIFICAR: the original development environment's complete `pip freeze`, and whether additional packages/provider dependencies were installed. Consider adding a documented `requirements-airflow.txt` and testing these instructions from a clean venv.]** The current DAG invokes `gcloud` via subprocess rather than using an Airflow Google provider operator.
+The repository does not include the original environment's complete `pip freeze`, so additional installed packages cannot be ruled out. A pinned `requirements-airflow.txt` and a fresh-virtualenv installation test would improve reproducibility. The current DAG invokes `gcloud` via subprocess rather than using an Airflow Google provider operator.
 
 ### Configure Google Cloud authentication
 
@@ -245,7 +243,7 @@ This is the **single source of recorded numeric results** for this documentation
 
 **GCS verification:** execution logs printed the uploaded object URI and a separate `gcloud storage ls gs://.../snapshots/` confirmed the object existed. **Upsert verification:** the MERGE logs showed a successful query and an unchanged-snapshot affected-row count of zero. These are manual integration observations; the mocked Python tests alone do **not** verify cloud infrastructure.
 
-A manual controlled-data experiment was discussed during development, but its SQL fixture and repeatable procedure were not committed. **[VERIFICAR: archive the test setup and before/after evidence before citing synthetic insert/update experiments as reproducible regression tests.]**
+A manual controlled-data experiment was discussed during development, but its SQL fixture and repeatable procedure were not committed. Accordingly, this runbook does **not** present synthetic insert/update experiments as reproducible regression tests.
 
 ## 9. Security and IAM
 
@@ -261,7 +259,7 @@ The documented deployment used dedicated service identities rather than service-
 | Same dbt identity | `roles/bigquery.dataViewer` | Raw BigQuery dataset |
 | Same dbt identity | `roles/bigquery.dataEditor` | Analytics BigQuery dataset |
 
-**[VERIFICAR: current project, dataset, bucket IAM bindings; confirm each Cloud Run Job's service account and that no unintended broader roles are inherited.]** Limit access to necessary resources. The local Airflow CLI uses an authenticated developer identity with rights to execute jobs; it should not be confused with the identities used *inside* the containers.
+The permissions listed above reflect grants configured during development; current effective permissions, inherited grants, and Cloud Run service-account bindings have **not** been independently audited. Limit access to necessary resources. The local Airflow CLI uses an authenticated developer identity with rights to execute jobs; it should not be confused with the identities used *inside* the containers.
 
 `dbt/profiles.yml` contains PostgreSQL env-var references for local development and a BigQuery OAuth target. `deploy/dbt/profiles.yml` is the cloud-only BigQuery profile. Neither should contain private key material. `.env` is excluded from Git; review changes before commits.
 
