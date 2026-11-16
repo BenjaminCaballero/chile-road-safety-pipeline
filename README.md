@@ -1,139 +1,105 @@
 # Chile Road Safety Data Pipeline
 
-An end-to-end batch data engineering project that extracts, validates, stores, and transforms public road safety statistics from Chile using **Python, PostgreSQL, dbt, and Docker**.
+A batch data-engineering **portfolio and learning project** that explores year-over-year trends in **reported crashes (*siniestros*) by vehicle type** in Chile. It ingests public annual statistics presented by CONASET through Observatorio Logístico, validates and stores source records, and builds the analytical model `mart_vehicle_trends` with dbt.
 
-The project demonstrates practical data engineering concepts, including REST API ingestion, data validation, ingestion traceability, transactional and idempotent loading, SQL transformations, and automated data quality testing.
+**Reported crashes (*siniestros*)** is the term used throughout this documentation for the source field `siniestros` and its renamed SQL field `crashes`. Records describe annual vehicle-type aggregates, **not individual crash events**.
 
-The entire pipeline can be executed with a single command, from the source API to analytical models in PostgreSQL.
+| Path | Stack | Status |
+| --- | --- | --- |
+| **Google Cloud** | Docker, Artifact Registry, Cloud Run Jobs, Cloud Storage, BigQuery, dbt, Apache Airflow | End-to-end execution verified |
+| **Local development** | Python, Docker Compose, PostgreSQL, dbt | End-to-end execution verified |
 
-> **Note:** Python and dbt run on the host machine. Docker Compose is used to run PostgreSQL.
+> **Deployment scope:** All three cloud processing stages run in Google Cloud, but **Airflow runs on local Ubuntu**, its DAG is **manually triggered** (`schedule=None`), and **Cloud Composer has not been deployed**. The local PostgreSQL implementation is preserved as a separate execution path. This is a verified portfolio deployment, not a production service.
 
-## Quick Start
+For the cloud architecture, deployed-resource reference, verification evidence, and operations runbook, see **[Cloud Pipeline — Architecture and Operations](docs/CLOUD_PIPELINE.md)**.
+
+## Contents
+
+- [Local quick start](#local-quick-start)
+- [1. Local architecture](#1-local-architecture)
+- [2. Technology stack](#2-technology-stack)
+- [3. Data source](#3-data-source)
+- [4. Pipeline components](#4-pipeline-components)
+- [5. Project structure](#5-project-structure)
+- [6. Local setup notes](#6-local-setup-notes)
+- [7. Testing](#7-testing)
+- [8. Example analytical queries](#8-example-analytical-queries)
+- [9. Engineering decisions](#9-engineering-decisions)
+- [10. Data limitations](#10-data-limitations)
+- [11. License and data attribution](#11-license-and-data-attribution)
+- [12. Project status and next steps](#12-project-status-and-next-steps)
+
+## Local quick start
+
+**Prerequisites:** Ubuntu Linux, Python 3.12, Docker Engine with the daemon running, Docker Compose V2, and Git. The project was developed on Ubuntu; a fresh-clone installation has **not** been independently verified.
+
+> `scripts/bootstrap.sh` invokes **`sudo docker compose`**; it may request your system password. Docker group membership grants root-equivalent privileges and is not required for the script.
 
 ```bash
-# Clone the repository
-git clone https://github.com/BenjaminCaballero/chile-road-safety-pipeline.git
+# Clone the repository. Select the feature branch for the cloud-enabled code.
+git clone --branch feature/gcp-airflow \
+  https://github.com/BenjaminCaballero/chile-road-safety-pipeline.git
 cd chile-road-safety-pipeline
 
-# Create and activate a virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 python -m pip install -r requirements.txt
-
-# Configure environment variables
 cp .env.example .env
-# Edit .env and set POSTGRES_PASSWORD
-
-# Start PostgreSQL and initialize the database
+# Edit .env and set POSTGRES_PASSWORD for your local database.
 bash scripts/bootstrap.sh
-
-# Execute the complete pipeline
 dotenv run -- python -m src.pipeline
 ```
 
-If all stages succeed, the pipeline prints:
+The local runner calls ingestion, transactional PostgreSQL loading, and `dbt build` in sequence. A successful run prints `Pipeline completed successfully!`.
+
+**Google Cloud path:** The repository also includes containerized extraction, BigQuery upsert, and dbt execution. Its documented cloud environment is a **reference deployment relying on the author's existing project, bucket, datasets, IAM bindings, images, and jobs**; cloning the repository does not provision those resources. Follow the linked cloud runbook rather than treating the local setup above as cloud deployment instructions.
+
+## 1. Local architecture
 
 ```text
-Pipeline completed successfully!
+Observatorio Logístico API
+          |
+Python fetch + validation
+          |
+JSON snapshot (UUID + SHA-256)
+          |
+PostgreSQL raw.vehicle_safety + raw.ingestion_runs
+          |
+dbt: stg_vehicle_safety -> mart_vehicle_trends
+          |
+     SQL analysis
 ```
 
-Prerequisites, configuration details, and Docker permission notes are in [Setup Notes](#6-setup-notes). A complete installation from a fresh clone and an empty database has not yet been independently verified.
+The local PostgreSQL load commits in one transaction. The whole pipeline is **not** atomic: a later dbt failure does not roll back a successful PostgreSQL load.
 
----
+## 2. Technology stack
 
-## 1. Architecture
+| Technology | Purpose | Execution path |
+|---|---|---|
+| Python 3.12 and Requests | Source API extraction, validation, and snapshot creation | Both |
+| PostgreSQL 16 and Psycopg 3 | Transactional relational storage | Local |
+| Docker Compose | PostgreSQL development environment | Local |
+| Docker | Package extraction, merge, and dbt into container images | Cloud build/deployment |
+| Google Artifact Registry | Store and distribute Docker images used by Cloud Run | Cloud |
+| Google Cloud Run Jobs | Execute containerized batch steps on demand | Cloud |
+| Google Cloud Storage (GCS) | Persist validated JSON snapshots | Cloud |
+| Google BigQuery | Store raw and analytical datasets; execute an idempotent upsert (`MERGE`) | Cloud |
+| dbt Core 1.12 and dbt-bigquery 1.12 | SQL models and data quality checks | Both (target-specific) |
+| Apache Airflow 3 | Orchestrate remote jobs and transfer snapshot URIs via XCom | Orchestration |
+| Google Cloud IAM | Assign scoped service-account permissions to each Cloud Run Job | Cloud |
+| pytest | Run automated Python tests using fixtures and mocks | Development |
+| Git | Source version control | Development |
 
-```text
-         Observatorio Logístico
-              (REST API)
-                   |
-                   v
-           Python Extraction
-          (HTTP + Pagination)
-                   |
-                   v
-            Data Validation
-                   |
-                   v
-             JSON Snapshot
-          (UUID + SHA-256)
-                   |
-                   v
-               PostgreSQL
-               raw schema
-                   |
-          +--------+--------+
-          |                 |
-          v                 v
-   vehicle_safety      ingestion_runs
-          |
-          v
-        dbt Core
-          |
-          v
-   stg_vehicle_safety
-          |
-          v
-   mart_vehicle_trends
-          |
-          v
-     Analytical Queries
-    (Year-over-Year Trends)
-```
-
-**Execution flow:**
-
-1. Extract all available records from the REST API.
-2. Validate the extracted dataset.
-3. Save a JSON snapshot with execution metadata.
-4. Load the validated records into PostgreSQL.
-5. Execute dbt transformations and data quality tests.
-
-The pipeline follows a **fail-fast approach**: if a stage fails, subsequent stages are not executed.
-
-Database loading is transactional, but the entire pipeline is not atomic. If dbt fails after the PostgreSQL transaction commits, the validated data remains stored in the database.
-
-## 2. Technology Stack
-
-| Technology | Purpose |
-|---|---|
-| Python 3.12 | Data ingestion, validation, and pipeline execution |
-| Requests | HTTP communication with the REST API |
-| PostgreSQL 16 | Relational data storage |
-| Psycopg 3 | Python–PostgreSQL integration |
-| dbt Core 1.12 | SQL transformations and data quality tests |
-| Docker Compose | Local PostgreSQL environment |
-| pytest | Automated Python unit tests |
-| Git | Version control |
-
-## 3. Data Source
+## 3. Data source
 
 - **Provider:** Observatorio Logístico de Chile
-- **Original source:** CONASET
-- **Dataset:** Siniestros de tránsito por tipo de vehículo
-
-- **Dataset:** https://www.observatoriologistico.cl/datos/siniestros-de-transito-por-tipo-de-vehiculo
+- **Original source:** CONASET (based on crash reports from Carabineros de Chile)
+- **Dataset:** *Siniestros de tránsito por tipo de vehículo* (identifier `C015`)
+- **Source page:** https://www.observatoriologistico.cl/datos/siniestros-de-transito-por-tipo-de-vehiculo
 - **REST API:** `https://www.observatoriologistico.cl/api/v1/datastreams/C015/data`
+- **Granularity:** one annual aggregate per year and vehicle category; country-level coverage.
 
-The dataset contains **aggregated annual road traffic statistics by vehicle type**, not individual accident records.
-
-### Dataset Characteristics
-
-The following characteristics were observed during development in October 2026.
-
-| Characteristic | Value |
-|---|---|
-| Records | 293 |
-| Fields | 7 |
-| Period | 2002–2025 |
-| Years covered | 24 |
-| Vehicle categories observed | 15 |
-| Geographic coverage | Chile, national level |
-| Granularity | One record per year and vehicle type |
-
-These values may change when the source is updated.
+Snapshot-specific counts and dates are recorded only in the cloud guide's **Verification evidence** section; source content can change.
 
 **Original fields:**
 
@@ -141,50 +107,23 @@ These values may change when the source is updated.
 |---|---|
 | `anio` | Year |
 | `vehiculo` | Vehicle category |
-| `siniestros` | Reported traffic incidents |
+| `siniestros` | Reported crashes (*siniestros*) |
 | `fallecidos` | Fatalities |
 | `graves` | Serious injuries |
 | `menos_graves` | Less serious injuries |
 | `leves` | Minor injuries |
 
-## 4. Pipeline Components
+## 4. Pipeline components
 
-### 4.1. Data Ingestion
+### 4.1. Ingestion and validation
 
-**File:** `src/ingestion/api_client.py`
+`src/ingestion/api_client.py` makes HTTP requests with a timeout, follows API pagination metadata, checks page consistency and HTTP status, and rejects an unexpected total record count.
 
-The ingestion module retrieves records from the Observatorio Logístico REST API.
+`src/ingestion/validators.py` rejects empty datasets, missing fields, invalid types, non-positive years, negative counts, empty/whitespace-only vehicle categories, and duplicate `(anio, vehiculo)` keys (case-insensitive after trimming). **Not all validation branches have dedicated unit tests.**
 
-Features include:
+### 4.2. Snapshots and traceability
 
-- HTTP GET requests and JSON response parsing.
-- Dynamic pagination using API metadata.
-- HTTP error detection.
-- Pagination consistency checks.
-- Verification that the number of retrieved records matches the total reported by the API.
-
-If a request fails or the retrieved record count is inconsistent, the extraction raises an error rather than returning an incomplete dataset.
-
-### 4.2. Data Validation
-
-**File:** `src/ingestion/validators.py`
-
-Before database loading, the pipeline validates:
-
-- Presence of required fields.
-- Expected data types.
-- Non-negative numeric counts.
-- Non-empty vehicle categories.
-- Uniqueness of year–vehicle combinations.
-- Non-empty datasets.
-
-Invalid datasets are rejected before the loading stage.
-
-### 4.3. Snapshots and Traceability
-
-**File:** `src/ingestion/run_ingestion.py`
-
-Validated records are saved as JSON snapshots containing the extracted data and execution metadata.
+`src/ingestion/run_ingestion.py` writes a JSON snapshot to `data/raw/` with the following contract:
 
 | Field | Purpose |
 |---|---|
@@ -195,77 +134,26 @@ Validated records are saved as JSON snapshots containing the extracted data and 
 | `source_hash` | SHA-256 hash of the dataset |
 | `data` | Extracted records |
 
-Before hashing, records are sorted consistently and serialized into a standardized JSON representation.
+The hash uses a sorted, standardized JSON representation to avoid treating ordering changes as changes in source data. Local snapshots are Git-ignored; cloud runs upload snapshots to GCS.
 
-This allows the pipeline to detect changes in dataset content without treating differences in record ordering as changes.
+### 4.3. Local PostgreSQL loading
 
-During verified executions, repeated extractions produced the same SHA-256 hash for the 293 records.
+`src/storage/load_postgres.py` validates the snapshot, checks its count/hash, records metadata in `raw.ingestion_runs`, deletes and reloads `raw.vehicle_safety`, and verifies the final count in a **single database transaction**. The `raw.vehicle_safety` table uses a composite `(anio, vehiculo)` key; an existing `run_id` with inconsistent metadata is rejected.
 
-Snapshots are stored in `data/raw/` and excluded from Git.
+This is a **transactional full refresh**, not an upsert. Snapshots are retained separately; PostgreSQL stores the current data and ingestion-run metadata.
 
-### 4.4. PostgreSQL Storage
+### 4.4. BigQuery loaders: different responsibilities
 
-**File:** `src/storage/load_postgres.py`
+- `src/storage/load_bigquery.py` is a **standalone full-replacement loader** using `WRITE_TRUNCATE`. Its mocked tests cover that module; it is **not** the loader called by the current cloud DAG.
+- `src/storage/merge_bigquery.py` is the **current cloud upsert**. It reads GCS/local snapshots, stages validated rows, and conditionally updates changed matching keys or inserts missing keys with `MERGE`. The code does not implement source-side deletion propagation. Its SQL is **not covered by dedicated automated tests**.
 
-The project uses a single PostgreSQL database with two ingestion tables.
+See the cloud operations guide for staging, rerun, and failure behavior.
 
-**`raw.vehicle_safety`**
+### 4.5. SQL transformations with dbt
 
-Stores the currently loaded dataset, including incident and casualty metrics, the associated execution identifier, and a composite primary key on year and vehicle type.
+`dbt/models/staging/stg_vehicle_safety.sql` produces standardized field names and retains `run_id`. The final model is `dbt/models/marts/mart_vehicle_trends.sql`; both are configured as views (PostgreSQL schema `analytics`, BigQuery dataset `road_safety_analytics`).
 
-**`raw.ingestion_runs`**
-
-Stores ingestion metadata, including execution UUID, source identifier, timestamps, record count, and source hash.
-
-#### Load Strategy: Full Refresh
-
-Each successful load replaces the current dataset in `raw.vehicle_safety`.
-
-This approach was chosen because:
-
-- The source API exposes the complete available series.
-- The dataset is small.
-- A full refresh simplifies consistency and recovery.
-
-Previous snapshots remain available locally as JSON files. The database stores the current dataset and the ingestion execution history, not complete historical copies of every dataset version.
-
-#### Transactional Loading
-
-The loading process:
-
-1. Reads and validates the JSON snapshot.
-2. Verifies its record count and source hash.
-3. Registers the ingestion execution.
-4. Replaces the current dataset.
-5. Verifies the number of loaded records.
-6. Commits the transaction if all operations succeed.
-
-If a database operation raises an error, the transaction is rolled back.
-
-#### Idempotency
-
-The loading strategy prevents duplicate records in the current dataset.
-
-- The composite primary key enforces uniqueness on year–vehicle combinations.
-- Re-loading the same snapshot does not duplicate its execution record.
-- Running the full pipeline again generates a new `run_id`, even when the source data remains unchanged.
-- Identical source hashes indicate identical content under the project's standardized representation.
-
-These behaviors were verified through repeated executions.
-
-### 4.5. SQL Transformations with dbt
-
-**Directory:** `dbt/`
-
-dbt separates analytical SQL transformations from Python ingestion logic.
-
-Both models are materialized as PostgreSQL views.
-
-#### `stg_vehicle_safety`
-
-**File:** `dbt/models/staging/stg_vehicle_safety.sql`
-
-Standardizes source column names and prepares records for analytical transformations.
+**Staging field mappings:**
 
 | Original column | Staging column |
 |---|---|
@@ -277,331 +165,164 @@ Standardizes source column names and prepares records for analytical transformat
 | `menos_graves` | `less_serious_injuries` |
 | `leves` | `minor_injuries` |
 
-#### `mart_vehicle_trends`
+**Actual columns of `mart_vehicle_trends`** (in SQL `SELECT` order):
 
-**File:** `dbt/models/marts/mart_vehicle_trends.sql`
+| Column | Meaning |
+|---|---|
+| `year` | Observation year |
+| `vehicle_type` | Normalized vehicle category |
+| `crashes` | Reported crashes for that year/category |
+| `fatalities` | Reported fatalities for that year/category |
+| `previous_year` | Previous observed year from `LAG(year)` |
+| `previous_crashes` | Previous observed reported-crash count from `LAG(crashes)` |
+| `crashes_yoy_pct` | Percentage change, rounded to two decimals; `NULL` when years are not consecutive or the prior count is zero |
 
-Calculates year-over-year changes in reported incidents by vehicle type.
+The model uses `LAG()` partitioned by vehicle category and ordered by year. `crashes_yoy_pct` compares **only consecutive years**, avoiding false comparisons across missing years and division by zero.
 
-The model uses the SQL `LAG()` window function to retrieve previous observations within each vehicle category.
-
-The percentage change is calculated as:
-
-```text
-((current_crashes - previous_crashes) / previous_crashes) * 100
-```
-
-The calculation is performed only when:
-
-- The previous observation belongs to the immediately preceding year.
-- The previous incident count is greater than zero.
-
-Otherwise, the result is `NULL`.
-
-This avoids comparisons across non-consecutive years and division by zero.
-
-The final analytical model is available as:
-
-`analytics.mart_vehicle_trends`
-
-## 5. Project Structure
+## 5. Project structure
 
 ```text
-chile-road-safety-pipeline/
-│
-├── src/
-│   ├── ingestion/
-│   │   ├── __init__.py
-│   │   ├── api_client.py
-│   │   ├── validators.py
-│   │   └── run_ingestion.py
-│   │
-│   ├── storage/
-│   │   ├── __init__.py
-│   │   └── load_postgres.py
-│   │
-│   └── pipeline.py
-│
-├── dbt/
-│   ├── dbt_project.yml
-│   ├── profiles.yml
-│   ├── models/
-│   │   ├── staging/
-│   │   │   ├── _sources.yml
-│   │   │   └── stg_vehicle_safety.sql
-│   │   ├── marts/
-│   │   │   └── mart_vehicle_trends.sql
-│   │   └── schema.yml
-│   └── tests/
-│       └── assert_unique_year_vehicle.sql
-│
-├── sql/
-│   └── 01_schema.sql
-│
-├── scripts/
-│   └── bootstrap.sh
-│
-├── test/
-│   └── test_validators.py
-│
-├── data/
-│   └── raw/
-│
-├── compose.yaml
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── LICENSE
-└── README.md
+src/ingestion/             # API, validation, snapshots
+src/storage/               # PostgreSQL, BigQuery full load, MERGE, GCS
+src/cloud/extract_upload.py
+src/pipeline.py            # Local three-step runner
+dbt/models/                # Staging and analytical SQL
+dbt/tests/                 # Custom uniqueness test
+dbt/profiles.yml           # Local PostgreSQL/BigQuery targets
+airflow/dags/chile_road_safety.py
+deploy/dbt/profiles.yml    # BigQuery profile for container
+test/test_validators.py
+test/test_load_bigquery.py
+test/test_gcs.py
+Dockerfile                 # Extraction image
+Dockerfile.merge           # BigQuery MERGE image
+Dockerfile.dbt             # dbt image
+requirements.txt
+requirements-cloud.txt
+requirements-merge.txt
+requirements-dbt.txt
+compose.yaml
+sql/01_schema.sql
+scripts/bootstrap.sh
+.env.example
+README.md
 ```
 
-## 6. Setup Notes
+The cloud guide is delivered as `docs/CLOUD_PIPELINE.md` alongside this README. Generated data, virtual environments, credentials, logs, and dbt build artifacts should not be committed.
 
-### Prerequisites
+## 6. Local setup notes
 
-The project was developed and tested with:
-
-- Ubuntu Linux
-- Python 3.12
-- Docker Engine
-- Docker Compose V2
-- Git
-
-Docker must be installed and running before initializing PostgreSQL.
-
-### Environment Variables
-
-Copy `.env.example` to `.env` and configure:
-
-```dotenv
-POSTGRES_USER=road_safety
-POSTGRES_PASSWORD=your_local_password
-POSTGRES_DB=road_safety
-POSTGRES_PORT=5433
-```
-
-Replace `your_local_password` with a password for your local environment.
-
-The `.env` file is excluded from version control.
-
-Python connects to PostgreSQL through `127.0.0.1:5433`.
-
-The `dotenv` command is provided by `python-dotenv`. It loads variables from `.env` when running the pipeline.
-
-### Database Initialization
-
-The `scripts/bootstrap.sh` script:
-
-1. Starts PostgreSQL with Docker Compose.
-2. Waits until the container is healthy.
-3. Executes `sql/01_schema.sql`.
-
-The script can be executed again without recreating existing tables.
-
-### Docker Permissions
-
-The bootstrap script and the `psql` example in [Section 8](#8-example-analytical-queries) use `sudo` to access Docker. Docker's Linux post-installation documentation describes how to configure non-root access, although membership in the `docker` group grants root-equivalent privileges. Use it only on a personal or development machine.
+- `.env.example` contains `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `POSTGRES_PORT` for the local Compose/PostgreSQL path. Copy it to `.env`, then set a local password. `.env` is Git-ignored.
+- The local database is reached at `127.0.0.1:5433` by the Python loader and dbt profile.
+- `scripts/bootstrap.sh` starts Compose with `sudo docker compose up -d --wait` and applies `sql/01_schema.sql` with `psql`.
+- Docker group membership grants root-equivalent privileges. Follow the Docker project's security guidance if changing group membership.
+- A fresh-clone/local-database bootstrap has not been independently verified; no claim of turnkey installation is made here.
 
 ## 7. Testing
 
-### 7.1. Python Unit Tests
-
-Run:
-
 ```bash
+source .venv/bin/activate
 python -m pytest -q
-```
-
-Six unit tests verify:
-
-1. Acceptance of valid records.
-2. Rejection of negative incident counts.
-3. Rejection of empty datasets.
-4. Detection of missing required fields.
-5. Detection of duplicate business keys.
-6. Rejection of incorrect data types.
-
-**Verified result:** `6 passed`
-
-These tests use controlled sample data and do not require the external API.
-
-### 7.2. dbt Tests
-
-Run:
-
-```bash
+# Builds the local PostgreSQL views and executes dbt data tests:
 dotenv run -- dbt build --project-dir dbt --profiles-dir dbt
 ```
 
-The dbt project includes:
+**Test coverage (verified from `test/`):**
 
-- 2 SQL models.
-- 6 `not_null` tests.
-- 1 custom uniqueness test.
+| Tests | Covered behavior |
+|---|---|
+| `test_validators.py` | Valid record, negative `siniestros`, empty dataset, missing field, duplicate key, wrong numeric type |
+| `test_load_bigquery.py` | Full `WRITE_TRUNCATE` load with mocked client, corrupted snapshot hash, mismatch between expected and **loaded table** row count |
+| `test_gcs.py` | Mocked GCS download, create-only upload, existing-object metadata match/mismatch |
 
-The custom test verifies that the analytical mart contains at most one record per year and vehicle category.
+The code checks for empty vehicle categories, **but there is no dedicated automated test for that branch**. The suite has no dedicated automated tests for `api_client.py`, `load_postgres.py`, `merge_bigquery.py` SQL/upsert, `extract_upload.py`, or the Airflow DAG. Mocked cloud tests are **not** live cloud integration tests.
 
-**Verified result:**
+**Local verification:** repeated local loads preserved unique `(anio, vehiculo)` records; a manual `ROLLBACK` exercise confirmed PostgreSQL transaction recovery. This was a manual observation, not an automated fault-injection test.
 
-```text
-PASS=9 WARN=0 ERROR=0 TOTAL=9
-```
+For the recorded test counts, cloud execution logs, GCS verification, and upsert observations, see **Verification evidence** in the cloud guide.
 
-This corresponds to two successfully built models and seven successful data tests.
+## 8. Example analytical queries
 
-### 7.3. Idempotency Verification
-
-The pipeline was executed repeatedly against the same source dataset.
-
-| Metric | Verified result |
-|---|---:|
-| Records in `raw.vehicle_safety` | 293 |
-| Unique year–vehicle combinations | 293 |
-| Records in `analytics.mart_vehicle_trends` | 293 |
-
-Different pipeline executions generated different UUIDs while preserving the same source hash when the dataset remained unchanged.
-
-Re-loading the same snapshot did not duplicate its execution record.
-
-### 7.4. Transaction Rollback Verification
-
-PostgreSQL rollback behavior was verified manually using a controlled transaction.
-
-The test:
-
-1. Started a transaction.
-2. Deleted the 293 records from `raw.vehicle_safety`.
-3. Triggered an intentional SQL error.
-4. Executed `ROLLBACK`.
-5. Confirmed that all 293 records remained available.
-
-This verifies PostgreSQL's transaction rollback behavior.
-
-It does not replace an automated failure-injection test of the Python loading module.
-
-## 8. Example Analytical Queries
-
-Connect to PostgreSQL:
-
-```bash
-sudo docker compose exec postgres sh -c \
-'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-```
-
-### Query 1: Verify the Analytical Dataset
+Run locally using `sudo docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`.
 
 ```sql
-SELECT COUNT(*)
-FROM analytics.mart_vehicle_trends;
-```
+-- Count analytical rows
+SELECT COUNT(*) FROM analytics.mart_vehicle_trends;
 
-**Verified result:** `293`
-
-### Query 2: Automobile Incident Trends
-
-```sql
-SELECT
-    year,
-    vehicle_type,
-    crashes,
-    crashes_yoy_pct
+-- Vehicle-type trend (reported crashes)
+SELECT year, vehicle_type, crashes, crashes_yoy_pct
 FROM analytics.mart_vehicle_trends
 WHERE vehicle_type = 'Automóvil'
 ORDER BY year DESC
 LIMIT 3;
-```
 
-Example results from the verified dataset:
-
-| Year | Vehicle type | Crashes | YoY change |
-|---|---|---:|---:|
-| 2025 | Automóvil | 49,546 | -6.30% |
-| 2024 | Automóvil | 52,877 | -7.09% |
-| 2023 | Automóvil | 56,915 | -9.48% |
-
-These values represent reported incidents associated with the automobile category.
-
-They should not automatically be interpreted as the number of unique traffic accidents nationwide.
-
-### Query 3: Largest Annual Increases
-
-```sql
-SELECT
-    year,
-    vehicle_type,
-    crashes,
-    crashes_yoy_pct
+-- Largest calculated year-over-year increases
+SELECT year, vehicle_type, crashes, crashes_yoy_pct
 FROM analytics.mart_vehicle_trends
 WHERE crashes_yoy_pct IS NOT NULL
 ORDER BY crashes_yoy_pct DESC
 LIMIT 10;
 ```
 
-This query identifies the largest year-over-year percentage increases in the available data.
+Interpret growth rates together with the underlying counts. Category counts must not automatically be summed as distinct nationwide crash events.
 
-Results should be interpreted alongside the underlying counts, since large percentage changes may occur when the previous count is small.
+## 9. Engineering decisions
 
-## 9. Engineering Decisions
+**Local PostgreSQL:** Docker Compose provides a small local database; a transactional full refresh is straightforward for this source size. It does not depend on cloud provisioning.
 
-**PostgreSQL:** A reliable relational database that runs locally through Docker without requiring cloud infrastructure. For a dataset containing a few hundred records, distributed processing would introduce unnecessary complexity.
+**dbt and separate SQL models:** The staging view standardizes names; the analytical mart computes consecutive-year comparisons and tests basic non-null/uniqueness properties.
 
-**dbt:** Separates analytical transformations from Python ingestion logic and provides SQL model dependencies and automated data quality tests.
+**JSON snapshots and hashing:** Snapshot metadata provides a way to compare extracted datasets and investigate specific runs; it does not constitute a complete audit/history system.
 
-**JSON snapshots:** Preserve validated source records and execution metadata, supporting debugging, auditing, and reproduction of individual ingestions.
+**Cloud Run Jobs + Artifact Registry:** Three purpose-built images run finite batch processes without a continuously running application server. Artifact Registry stores images, not the data snapshots.
 
-**Transactional full-refresh loading:** Replaces the current dataset within a single database transaction, avoiding partially committed updates.
+**Cloud Storage:** A common storage location makes validated snapshots accessible between independent jobs. Uploads use a create-only precondition, not a bucket-enforced immutability guarantee.
 
-**Python pipeline runner:** Coordinates ingestion, storage, and dbt execution without introducing unnecessary orchestration infrastructure. The project targets command-based batch processing rather than scheduled or continuous execution.
+**BigQuery `MERGE`:** An idempotent upsert avoids rewriting unchanged rows on an identical snapshot, while leaving source deletions unsynchronized.
 
-## 10. Data Limitations
+**Airflow and scoped IAM:** Airflow supplies ordering and the expected GCS URI; dedicated service identities limit cloud resource access. The detailed operational and permission model belongs in the cloud guide.
 
-The dataset and implementation have several important limitations.
+## 10. Data limitations
+
+The dataset and pipeline implementation have several important limitations.
+
+**Dataset limitations:**
 
 - **Aggregated data:** Each record represents annual statistics for a vehicle category, not an individual accident.
 - **No detailed geography:** The dataset cannot support analysis by municipality, accident location, or road segment.
 - **Incomplete category coverage:** Some vehicle categories are absent in certain years, and the reasons have not been established.
 - **Potential category overlap:** Vehicle categories have not been confirmed as mutually exclusive. Summing their incident counts does not necessarily represent the total number of unique accidents.
 - **No causal interpretation:** Changes in reported incidents cannot be attributed to specific causes using this dataset alone.
+
+**Pipeline limitations:**
+
 - **Small dataset:** The project demonstrates batch data engineering practices, not large-scale or distributed processing.
-- **Local execution:** The pipeline does not currently include recurring scheduling or cloud deployment.
+- **Full-source extraction:** Each ingestion run retrieves the complete dataset from the source API. Upsert processing occurs at the BigQuery loading stage, not at the API extraction stage.
+- **No deletion synchronization:** The BigQuery `MERGE` operation inserts new records and updates changed records, but does not automatically delete records that disappear from the source dataset.
+- **Batch processing:** The pipeline is designed for periodic batch execution rather than real-time or streaming data ingestion.
 
-## 11. License and Data Attribution
+These limitations should be considered when interpreting analytical results or extending the pipeline to larger datasets and production workloads.
 
-### Code License
+## 11. License and data attribution
 
-The source code is released under the MIT License. See the [LICENSE](LICENSE) file for details.
+### Code license
 
-### Data Attribution
+The source code is released under the MIT License. See [LICENSE](LICENSE) for details.
+
+### Data attribution
 
 The project uses publicly available road safety statistics provided by **Observatorio Logístico de Chile**, originating from CONASET.
 
-Source:
+Source: https://www.observatoriologistico.cl/datos/siniestros-de-transito-por-tipo-de-vehiculo
 
-https://www.observatoriologistico.cl/datos/siniestros-de-transito-por-tipo-de-vehiculo
+The MIT License applies to this repository's code, **not** to the source data. Downloaded datasets and generated snapshots are excluded from the repository. The source page identifies CONASET as the responsible entity but does not state a dataset-specific open-data license. CONASET publishes [website-content usage terms](https://conaset.cl/politica-de-privacidad/); these must not be assumed to grant unrestricted redistribution rights for this dataset. **[VERIFICAR: dataset-specific reuse/redistribution license or permission from the data provider.]**
 
-The MIT License applies to the code in this repository, not to the source data. Downloaded datasets and generated snapshots are excluded from the repository. Users should review the provider's applicable terms before redistributing the source data.
+## 12. Project status and next steps
 
-## 12. Project Status and Future Improvements
+**Status:** The local PostgreSQL route and the cloud-processing route were both exercised successfully. The source code, Dockerfiles, dbt models, and orchestration DAG are present; this is not a continuously scheduled or completely reproducible fresh-project deployment.
 
-**MVP: Functionally implemented and verified in the development environment.**
-
-Verified components:
-
-- REST API ingestion with dynamic pagination.
-- Python data validation.
-- JSON snapshots with UUID and SHA-256 traceability.
-- Transactional PostgreSQL loading.
-- Basic idempotency verification.
-- SQL transformations using dbt.
-- Automated Python and dbt tests.
-- End-to-end execution through a single command.
-- PostgreSQL initialization using Docker Compose.
-- Manual PostgreSQL rollback verification.
-
-### Future Improvements
-
-- [ ] Verify the complete setup from a fresh clone and empty PostgreSQL environment.
-- [ ] Add GitHub Actions for automated testing.
-- [ ] Add integration tests for database loading failures.
-
-The current implementation prioritizes **correctness and maintainability** over unnecessary infrastructure complexity. Reproducibility from a clean environment is the next item to verify.
+- [ ] Verify bootstrap and dbt locally from a clean clone and empty database.
+- [ ] Add automated tests for currently untested modules and failure scenarios.
+- [ ] Pin/document the Airflow development environment and its installation.
+- [ ] Add CI, deployment automation, alerting, and backup/retention policies where appropriate.
+- [ ] Evaluate Infrastructure as Code and managed orchestration only if their operational benefit justifies the additional cost and complexity.
